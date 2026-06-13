@@ -264,3 +264,21 @@ data class OverallStats(
     val totalClients: Int,
     val categoryStats: List<CategoryStat>
 )
+
+@Serializable
+data class MeResponse(
+    val user: UserDTO,
+    val client: ClientDTO?
+)
+
+@Serializable
+data class BankAccountCreatedResponse(
+    val message: String,
+    val id: Int
+)
+
+@Serializable
+data class CheckoutResponse(
+    val message: String,
+    val invoice: OrderDTO
+)

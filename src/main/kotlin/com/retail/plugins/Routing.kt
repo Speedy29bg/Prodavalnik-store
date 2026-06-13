@@ -134,9 +134,9 @@ fun Application.configureRouting() {
                         }
                     } else null
                     
-                    call.respond(HttpStatusCode.OK, mapOf(
-                        "user" to UserDTO(session.userId, session.username, session.role),
-                        "client" to clientInfo
+                    call.respond(HttpStatusCode.OK, MeResponse(
+                        user = UserDTO(session.userId, session.username, session.role),
+                        client = clientInfo
                     ))
                 }
             }
@@ -384,7 +384,7 @@ fun Application.configureRouting() {
                                 it[accountNumber] = req.accountNumber
                             } get RetailBankAccounts.id
                         }
-                        call.respond(HttpStatusCode.Created, mapOf("message" to "Банковата сметка е добавена", "id" to accId))
+                        call.respond(HttpStatusCode.Created, BankAccountCreatedResponse("Банковата сметка е добавена", accId))
                     }
                     
                     delete("/{clientId}/bank-accounts/{accId}") {
@@ -805,7 +805,7 @@ fun Application.configureRouting() {
                                 )
                             }
                             
-                            call.respond(HttpStatusCode.Created, mapOf("message" to "Плащането е успешно. Генерирана сметка/фактура", "invoice" to generatedInvoice))
+                            call.respond(HttpStatusCode.Created, CheckoutResponse("Плащането е успешно. Генерирана сметка/фактура", generatedInvoice))
                         } catch (e: Exception) {
                             call.respond(HttpStatusCode.BadRequest, mapOf("error" to e.message))
                         }
