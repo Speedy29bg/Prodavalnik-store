@@ -13,9 +13,12 @@ fun Application.configureDatabases() {
     val config = environment.config
     
     val driverClass = config.propertyOrNull("database.driver")?.getString() ?: "org.postgresql.Driver"
-    val dbUrl = config.propertyOrNull("database.url")?.getString() ?: "jdbc:postgresql://aws-1-eu-central-1.pooler.supabase.com:6543/postgres?ssl=true&sslmode=require"
-    val dbUser = config.propertyOrNull("database.user")?.getString() ?: "postgres.nuqaqxkbrjkenbpmhgdt"
-    val dbPassword = config.propertyOrNull("database.password")?.getString() ?: "ВАШАТА_СУПАБЕЙС_ПАРОЛА"
+    val dbUrl = config.propertyOrNull("database.url")?.getString() ?: "jdbc:postgresql://aws-1-eu-central-1.pooler.supabase.com:6543/postgres?ssl=true&sslmode=require&prepareThreshold=0"
+    var dbUser = config.propertyOrNull("database.user")?.getString() ?: "postgres.nuqaqxkbrjkenbpmhgdt"
+    if (!dbUser.contains(".")) {
+        dbUser = "$dbUser.nuqaqxkbrjkenbpmhgdt"
+    }
+    val dbPassword = config.propertyOrNull("database.password")?.getString() ?: "Prodavalnik"
 
     log.info("Connecting to Supabase Database...")
     
