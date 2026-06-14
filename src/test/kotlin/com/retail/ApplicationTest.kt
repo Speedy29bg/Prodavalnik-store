@@ -60,4 +60,23 @@ class ApplicationTest {
         val response = client.get("/api/users")
         assertTrue(response.status == HttpStatusCode.Unauthorized || response.status == HttpStatusCode.Forbidden)
     }
+
+    @Test
+    fun testIbanValidationLogic() {
+        assertTrue(com.retail.plugins.isValidIban("BG95UNCR96601012345678"))
+        assertTrue(com.retail.plugins.isValidIban("BG54DSKB93001098765432"))
+        assertFalse(com.retail.plugins.isValidIban("BG91UNCR96601012345679"))
+        assertFalse(com.retail.plugins.isValidIban("BG12345678901234567890"))
+        assertFalse(com.retail.plugins.isValidIban("INVALID"))
+    }
+
+    @Test
+    fun testPasswordComplexityLogic() {
+        assertTrue(com.retail.plugins.isValidPassword("Pass123"))
+        assertTrue(com.retail.plugins.isValidPassword("SecureP@ssw0rd"))
+        assertFalse(com.retail.plugins.isValidPassword("simple"))
+        assertFalse(com.retail.plugins.isValidPassword("SIMPLE"))
+        assertFalse(com.retail.plugins.isValidPassword("123456"))
+        assertFalse(com.retail.plugins.isValidPassword("P1a"))
+    }
 }

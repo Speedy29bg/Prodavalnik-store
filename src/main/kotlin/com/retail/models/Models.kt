@@ -23,7 +23,7 @@ object RetailStoreInfo : Table("retail_store_info") {
 
 object RetailClients : Table("retail_clients") {
     val id = integer("id").autoIncrement()
-    val userId = integer("user_id").references(RetailUsers.id)
+    val userId = integer("user_id").references(RetailUsers.id).index()
     val clientNumber = varchar("client_number", 50).uniqueIndex()
     val firstName = varchar("first_name", 100)
     val lastName = varchar("last_name", 100)
@@ -32,7 +32,7 @@ object RetailClients : Table("retail_clients") {
 
 object RetailBankAccounts : Table("retail_bank_accounts") {
     val id = integer("id").autoIncrement()
-    val clientId = integer("client_id").references(RetailClients.id)
+    val clientId = integer("client_id").references(RetailClients.id).index()
     val bankName = varchar("bank_name", 150)
     val accountNumber = varchar("account_number", 100)
     override val primaryKey = PrimaryKey(id)
@@ -79,8 +79,8 @@ object RetailPromotionItems : Table("retail_promotion_items") {
 
 object RetailOrders : Table("retail_orders") {
     val id = integer("id").autoIncrement()
-    val clientId = integer("client_id").references(RetailClients.id)
-    val bankAccountId = integer("bank_account_id").references(RetailBankAccounts.id)
+    val clientId = integer("client_id").references(RetailClients.id).index()
+    val bankAccountId = integer("bank_account_id").references(RetailBankAccounts.id).index()
     val totalAmount = double("total_amount")
     val orderDate = datetime("order_date")
     val status = varchar("status", 50) // "pending", "paid"
@@ -89,8 +89,8 @@ object RetailOrders : Table("retail_orders") {
 
 object RetailOrderItems : Table("retail_order_items") {
     val id = integer("id").autoIncrement()
-    val orderId = integer("order_id").references(RetailOrders.id)
-    val itemId = integer("item_id").references(RetailItems.id)
+    val orderId = integer("order_id").references(RetailOrders.id).index()
+    val itemId = integer("item_id").references(RetailItems.id).index()
     val quantity = integer("quantity")
     val unitPrice = double("unit_price")
     val discountAmount = double("discount_amount")

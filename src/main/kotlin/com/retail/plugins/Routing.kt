@@ -15,6 +15,70 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import org.mindrot.jbcrypt.BCrypt
 import com.retail.models.*
+import java.util.concurrent.ConcurrentHashMap
+import java.time.Instant
+
+object RateLimiter {
+    private val loginAttempts = ConcurrentHashMap<String, MutableList<Instant>>()
+    private val registerAttempts = ConcurrentHashMap<String, MutableList<Instant>>()
+    
+    fun isLoginLimitExceeded(ip: String): Boolean {
+        cleanup(loginAttempts)
+        val now = Instant.now()
+        val attempts = loginAttempts.computeIfAbsent(ip) { mutableListOf() }
+        attempts.add(now)
+        val count = attempts.count { it.isAfter(now.minusSeconds(60)) }
+        return count > 5
+    }
+    
+    fun isRegisterLimitExceeded(ip: String): Boolean {
+        cleanup(registerAttempts)
+        val now = Instant.now()
+        val attempts = registerAttempts.computeIfAbsent(ip) { mutableListOf() }
+        attempts.add(now)
+        val count = attempts.count { it.isAfter(now.minusSeconds(60)) }
+        return count > 3
+    }
+    
+    private fun cleanup(map: ConcurrentHashMap<String, MutableList<Instant>>) {
+        val cutoff = Instant.now().minusSeconds(60)
+        val iterator = map.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            entry.value.removeIf { it.isBefore(cutoff) }
+            if (entry.value.isEmpty()) {
+                iterator.remove()
+            }
+        }
+    }
+}
+
+fun isValidIban(iban: String): Boolean {
+    val clean = iban.replace("\\s".toRegex(), "").uppercase()
+    if (!Regex("^[A-Z]{2}[0-9]{2}[A-Z0-9]{4,30}$").matches(clean)) return false
+    
+    val rearranged = clean.substring(4) + clean.substring(0, 4)
+    val sb = java.lang.StringBuilder()
+    for (ch in rearranged) {
+        if (ch.isLetter()) {
+            sb.append(ch - 'A' + 10)
+        } else {
+            sb.append(ch)
+        }
+    }
+    
+    return try {
+        val bigInt = java.math.BigInteger(sb.toString())
+        bigInt.mod(java.math.BigInteger.valueOf(97)) == java.math.BigInteger.ONE
+    } catch (e: Exception) {
+        false
+    }
+}
+
+fun isValidPassword(password: String): Boolean {
+    val passwordRegex = Regex("^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d).{6,}$")
+    return passwordRegex.matches(password)
+}
 
 @kotlinx.serialization.Serializable
 data class LoginRequest(val username: String, val passwordHash: String)
@@ -28,6 +92,11 @@ fun Application.configureRouting() {
             // --- Authentication ---
             route("/auth") {
                 post("/login") {
+                    val ip = call.request.headers["X-Forwarded-For"]?.split(",")?.firstOrNull()?.trim() 
+                        ?: call.request.local.remoteHost
+                    if (RateLimiter.isLoginLimitExceeded(ip)) {
+                        return@post call.respond(HttpStatusCode.TooManyRequests, mapOf("error" to "Прекалено много опити за влизане. Моля, опитайте отново след минута."))
+                    }
                     val req = call.receive<LoginRequest>()
                     val user = transaction {
                         RetailUsers.select { RetailUsers.username eq req.username }.singleOrNull()
@@ -56,9 +125,34 @@ fun Application.configureRouting() {
                 }
                 
                 post("/register") {
+                    val ip = call.request.headers["X-Forwarded-For"]?.split(",")?.firstOrNull()?.trim() 
+                        ?: call.request.local.remoteHost
+                    if (RateLimiter.isRegisterLimitExceeded(ip)) {
+                        return@post call.respond(HttpStatusCode.TooManyRequests, mapOf("error" to "Прекалено много опити за регистрация. Моля, опитайте отново след минута."))
+                    }
                     val req = call.receive<ClientRegisterRequest>()
                     if (req.username.isBlank() || req.passwordHash.isBlank() || req.firstName.isBlank() || req.lastName.isBlank()) {
                         return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Всички полета са задължителни"))
+                    }
+                    if (!isValidPassword(req.passwordHash)) {
+                        return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Паролата трябва да бъде поне 6 символа и да съдържа поне една главна буква, една малка буква и една цифра"))
+                    }
+                    
+                    for (acc in req.bankAccounts) {
+                        if (acc.bankName.isNotBlank() || acc.accountNumber.isNotBlank()) {
+                            if (acc.bankName.isBlank() || acc.accountNumber.isBlank()) {
+                                return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Името на банката и IBAN са задължителни за всички въведени сметки"))
+                            }
+                            val cleanIban = acc.accountNumber.replace("\\s".toRegex(), "").uppercase()
+                            if (!isValidIban(cleanIban)) {
+                                return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалиден IBAN или грешна контролна сума: ${acc.accountNumber}"))
+                            }
+                        }
+                    }
+                    
+                    val ibans = req.bankAccounts.map { it.accountNumber.replace("\\s".toRegex(), "").uppercase() }
+                    if (ibans.size != ibans.distinct().size) {
+                        return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Не можете да добавите дублиращи се банкови сметки"))
                     }
                     
                     val usernameExists = transaction {
@@ -193,6 +287,9 @@ fun Application.configureRouting() {
                         if (req.username.isBlank() || req.passwordHash.isBlank() || req.role !in listOf("admin", "moderator", "client")) {
                             return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалидни данни за потребител"))
                         }
+                        if (!isValidPassword(req.passwordHash)) {
+                            return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Паролата трябва да бъде поне 6 символа и да съдържа поне една главна буква, една малка буква и една цифра"))
+                        }
                         
                         val usernameExists = transaction {
                             RetailUsers.select { RetailUsers.username eq req.username }.count() > 0
@@ -215,15 +312,38 @@ fun Application.configureRouting() {
                         val id = call.parameters["id"]?.toIntOrNull() ?: return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалидно ID"))
                         val req = call.receive<UserCreateRequest>()
                         
-                        transaction {
-                            RetailUsers.update({ RetailUsers.id eq id }) {
-                                it[role] = req.role
-                                if (req.passwordHash.isNotBlank()) {
-                                    it[passwordHash] = BCrypt.hashpw(req.passwordHash, BCrypt.gensalt())
+                        if (req.role !in listOf("admin", "moderator", "client")) {
+                            return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалидна роля"))
+                        }
+                        if (req.passwordHash.isNotBlank() && !isValidPassword(req.passwordHash)) {
+                            return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Паролата трябва да бъде поне 6 символа и да съдържа поне една главна буква, една малка буква и една цифра"))
+                        }
+                        
+                        val result = transaction {
+                            val user = RetailUsers.select { RetailUsers.id eq id }.singleOrNull()
+                            if (user != null) {
+                                if (user[RetailUsers.role] == "admin" && req.role != "admin") {
+                                    val adminCount = RetailUsers.select { RetailUsers.role eq "admin" }.count()
+                                    if (adminCount <= 1) {
+                                        return@transaction "Не може да промените ролята на единствения администратор"
+                                    }
+                                }
+                                
+                                RetailUsers.update({ RetailUsers.id eq id }) {
+                                    it[role] = req.role
+                                    if (req.passwordHash.isNotBlank()) {
+                                        it[passwordHash] = BCrypt.hashpw(req.passwordHash, BCrypt.gensalt())
+                                    }
                                 }
                             }
+                            null
                         }
-                        call.respond(HttpStatusCode.OK, mapOf("message" to "Потребителят е обновен успешно"))
+                        
+                        if (result != null) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to result))
+                        } else {
+                            call.respond(HttpStatusCode.OK, mapOf("message" to "Потребителят е обновен успешно"))
+                        }
                     }
                     
                     delete("/{id}") {
@@ -305,6 +425,26 @@ fun Application.configureRouting() {
                         if (req.username.isBlank() || req.passwordHash.isBlank() || req.firstName.isBlank() || req.lastName.isBlank()) {
                             return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалидни данни за регистрация на клиент"))
                         }
+                        if (!isValidPassword(req.passwordHash)) {
+                            return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Паролата трябва да бъде поне 6 символа и да съдържа поне една главна буква, една малка буква и една цифра"))
+                        }
+                        
+                        for (acc in req.bankAccounts) {
+                            if (acc.bankName.isNotBlank() || acc.accountNumber.isNotBlank()) {
+                                if (acc.bankName.isBlank() || acc.accountNumber.isBlank()) {
+                                    return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Името на банката и IBAN са задължителни за всички сметки"))
+                                }
+                                val cleanIban = acc.accountNumber.replace("\\s".toRegex(), "").uppercase()
+                                if (!isValidIban(cleanIban)) {
+                                    return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалиден IBAN или грешна контролна сума: ${acc.accountNumber}"))
+                                }
+                            }
+                        }
+                        
+                        val ibans = req.bankAccounts.map { it.accountNumber.replace("\\s".toRegex(), "").uppercase() }
+                        if (ibans.size != ibans.distinct().size) {
+                            return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Не можете да добавите дублиращи се банкови сметки"))
+                        }
                         
                         val usernameExists = transaction {
                             RetailUsers.select { RetailUsers.username eq req.username }.count() > 0
@@ -347,8 +487,22 @@ fun Application.configureRouting() {
                         val id = call.parameters["id"]?.toIntOrNull() ?: return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалидно ID"))
                         val req = call.receive<ClientRegisterRequest>()
                         
+                        if (req.firstName.isBlank() || req.lastName.isBlank()) {
+                            return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Името и фамилията са задължителни"))
+                        }
+                        if (req.passwordHash.isNotBlank() && !isValidPassword(req.passwordHash)) {
+                            return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Паролата трябва да бъде поне 6 символа и да съдържа поне една главна буква, една малка буква и една цифра"))
+                        }
+                        
+                        val exists = transaction {
+                            RetailClients.select { RetailClients.id eq id }.count() > 0
+                        }
+                        if (!exists) {
+                            return@put call.respond(HttpStatusCode.NotFound, mapOf("error" to "Клиентът не е намерен"))
+                        }
+                        
                         transaction {
-                            val client = RetailClients.select { RetailClients.id eq id }.singleOrNull() ?: return@transaction
+                            val client = RetailClients.select { RetailClients.id eq id }.singleOrNull()!!
                             RetailClients.update({ RetailClients.id eq id }) {
                                 it[firstName] = req.firstName
                                 it[lastName] = req.lastName
@@ -398,6 +552,11 @@ fun Application.configureRouting() {
                             return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Името на банката и номерът на сметката са задължителни"))
                         }
                         
+                        val cleanIban = req.accountNumber.replace("\\s".toRegex(), "").uppercase()
+                        if (!isValidIban(cleanIban)) {
+                            return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалиден IBAN или грешна контролна сума"))
+                        }
+                        
                         // Security check: Client can only modify their own bank accounts
                         val session = call.sessions.get<UserSession>()!!
                         if (session.role == "client") {
@@ -407,6 +566,15 @@ fun Application.configureRouting() {
                             if (!ownsProfile) {
                                 return@post call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Нямате достъп до този профил"))
                             }
+                        }
+                        
+                        val ibanExists = transaction {
+                            RetailBankAccounts.select {
+                                (RetailBankAccounts.clientId eq clientId) and (RetailBankAccounts.accountNumber eq req.accountNumber)
+                            }.count() > 0
+                        }
+                        if (ibanExists) {
+                            return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Тази банкова сметка вече е добавена към Вашия профил"))
                         }
                         
                         val accId = transaction {
@@ -455,8 +623,20 @@ fun Application.configureRouting() {
                 withRole("admin", "moderator") {
                     post {
                         val req = call.receive<SupplierCreateRequest>()
-                        if (req.name.isBlank() || req.address.isBlank()) {
-                            return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Името и адресът са задължителни"))
+                        if (req.name.isBlank() || req.address.isBlank() || req.phone.isBlank()) {
+                            return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Всички полета са задължителни"))
+                        }
+                        
+                        val phoneRegex = Regex("^\\+?[0-9\\s\\-]{6,20}$")
+                        if (!phoneRegex.matches(req.phone.trim())) {
+                            return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалиден формат за телефонен номер"))
+                        }
+                        
+                        val nameExists = transaction {
+                            RetailSuppliers.select { RetailSuppliers.name eq req.name }.count() > 0
+                        }
+                        if (nameExists) {
+                            return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Доставчик с това име вече съществува"))
                         }
                         
                         transaction {
@@ -472,6 +652,22 @@ fun Application.configureRouting() {
                     put("/{id}") {
                         val id = call.parameters["id"]?.toIntOrNull() ?: return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалидно ID"))
                         val req = call.receive<SupplierCreateRequest>()
+                        
+                        if (req.name.isBlank() || req.address.isBlank() || req.phone.isBlank()) {
+                            return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Всички полета са задължителни"))
+                        }
+                        
+                        val phoneRegex = Regex("^\\+?[0-9\\s\\-]{6,20}$")
+                        if (!phoneRegex.matches(req.phone.trim())) {
+                            return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалиден формат за телефонен номер"))
+                        }
+                        
+                        val nameExists = transaction {
+                            RetailSuppliers.select { (RetailSuppliers.name eq req.name) and (RetailSuppliers.id neq id) }.count() > 0
+                        }
+                        if (nameExists) {
+                            return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Доставчик с това име вече съществува"))
+                        }
                         
                         transaction {
                             RetailSuppliers.update({ RetailSuppliers.id eq id }) {
@@ -521,8 +717,23 @@ fun Application.configureRouting() {
                 withRole("admin", "moderator") {
                     post {
                         val req = call.receive<ItemCreateRequest>()
-                        if (req.name.isBlank() || req.price <= 0) {
-                            return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалидно име или цена"))
+                        if (req.name.isBlank() || req.category.isBlank() || req.price <= 0) {
+                            return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалидно име, категория или цена"))
+                        }
+                        if (req.supplierIds.isNotEmpty()) {
+                            val existingSupplierCount = transaction {
+                                RetailSuppliers.select { RetailSuppliers.id inList req.supplierIds }.count()
+                            }
+                            if (existingSupplierCount != req.supplierIds.distinct().size.toLong()) {
+                                return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Някои от избраните доставчици не съществуват"))
+                            }
+                        }
+                        
+                        val nameExists = transaction {
+                            RetailItems.select { RetailItems.name eq req.name }.count() > 0
+                        }
+                        if (nameExists) {
+                            return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Артикул с това име вече съществува"))
                         }
                         
                         // Auto-calculate item class based on price
@@ -554,6 +765,25 @@ fun Application.configureRouting() {
                     put("/{id}") {
                         val id = call.parameters["id"]?.toIntOrNull() ?: return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалидно ID"))
                         val req = call.receive<ItemCreateRequest>()
+                        
+                        if (req.name.isBlank() || req.category.isBlank() || req.price <= 0) {
+                            return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалидно име, категория или цена"))
+                        }
+                        if (req.supplierIds.isNotEmpty()) {
+                            val existingSupplierCount = transaction {
+                                RetailSuppliers.select { RetailSuppliers.id inList req.supplierIds }.count()
+                            }
+                            if (existingSupplierCount != req.supplierIds.distinct().size.toLong()) {
+                                return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Някои от избраните доставчици не съществуват"))
+                            }
+                        }
+                        
+                        val nameExists = transaction {
+                            RetailItems.select { (RetailItems.name eq req.name) and (RetailItems.id neq id) }.count() > 0
+                        }
+                        if (nameExists) {
+                            return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Артикул с това име вече съществува"))
+                        }
                         
                         val priceClass = when {
                             req.price <= 50.0 -> "Budget"
@@ -620,14 +850,25 @@ fun Application.configureRouting() {
                 withRole("admin", "moderator") {
                     post {
                         val req = call.receive<PromotionCreateRequest>()
-                        if (req.name.isBlank() || req.discountPercent <= 0) {
-                            return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалидно име или процент отстъпка"))
+                        if (req.name.isBlank() || req.discountPercent <= 0 || req.discountPercent > 100) {
+                            return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Името е задължително, а отстъпката трябва да бъде между 1% и 100%"))
+                        }
+                        if (req.itemIds.isNotEmpty()) {
+                            val existingItemCount = transaction {
+                                RetailItems.select { RetailItems.id inList req.itemIds }.count()
+                            }
+                            if (existingItemCount != req.itemIds.distinct().size.toLong()) {
+                                return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Някои от избраните артикули не съществуват"))
+                            }
                         }
                         
                         try {
-                            val formatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
                             val start = LocalDateTime.parse(req.startDate)
                             val end = LocalDateTime.parse(req.endDate)
+                            
+                            if (!start.isBefore(end)) {
+                                return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Началната дата трябва да бъде преди крайната дата"))
+                            }
                             
                             transaction {
                                 val promoId = RetailPromotions.insert {
@@ -654,9 +895,25 @@ fun Application.configureRouting() {
                         val id = call.parameters["id"]?.toIntOrNull() ?: return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалидно ID"))
                         val req = call.receive<PromotionCreateRequest>()
                         
+                        if (req.name.isBlank() || req.discountPercent <= 0 || req.discountPercent > 100) {
+                            return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Името е задължително, а отстъпката трябва да бъде между 1% и 100%"))
+                        }
+                        if (req.itemIds.isNotEmpty()) {
+                            val existingItemCount = transaction {
+                                RetailItems.select { RetailItems.id inList req.itemIds }.count()
+                            }
+                            if (existingItemCount != req.itemIds.distinct().size.toLong()) {
+                                return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Някои от избраните артикули не съществуват"))
+                            }
+                        }
+                        
                         try {
                             val start = LocalDateTime.parse(req.startDate)
                             val end = LocalDateTime.parse(req.endDate)
+                            
+                            if (!start.isBefore(end)) {
+                                return@put call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Началната дата трябва да бъде преди крайната дата"))
+                            }
                             
                             transaction {
                                 RetailPromotions.update({ RetailPromotions.id eq id }) {
@@ -742,6 +999,12 @@ fun Application.configureRouting() {
                         
                         if (req.items.isEmpty()) {
                             return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Пазарската количка е празна"))
+                        }
+                        
+                        for (item in req.items) {
+                            if (item.quantity <= 0) {
+                                return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Количеството на всеки артикул трябва да бъде по-голямо от 0"))
+                            }
                         }
                         
                         val clientProfile = transaction {
@@ -856,17 +1119,19 @@ fun Application.configureRouting() {
                         // Select paid orders
                         val paidOrders = RetailOrders.select { RetailOrders.status eq "paid" }.map { it[RetailOrders.id] }
                         
-                        val orderItems = RetailOrderItems.select { RetailOrderItems.orderId inList paidOrders }
-                        for (row in orderItems) {
-                            val itemId = row[RetailOrderItems.itemId]
-                            val qty = row[RetailOrderItems.quantity]
-                            val revenue = row[RetailOrderItems.finalPrice]
-                            
-                            val item = RetailItems.select { RetailItems.id eq itemId }.singleOrNull()
-                            val category = item?.get(RetailItems.category) ?: "Неизвестна"
-                            
-                            val current = categoryStats.getOrDefault(category, Pair(0, 0.0))
-                            categoryStats[category] = Pair(current.first + qty, current.second + revenue)
+                        if (paidOrders.isNotEmpty()) {
+                            val orderItems = RetailOrderItems.select { RetailOrderItems.orderId inList paidOrders }
+                            for (row in orderItems) {
+                                val itemId = row[RetailOrderItems.itemId]
+                                val qty = row[RetailOrderItems.quantity]
+                                val revenue = row[RetailOrderItems.finalPrice]
+                                
+                                val item = RetailItems.select { RetailItems.id eq itemId }.singleOrNull()
+                                val category = item?.get(RetailItems.category) ?: "Неизвестна"
+                                
+                                val current = categoryStats.getOrDefault(category, Pair(0, 0.0))
+                                categoryStats[category] = Pair(current.first + qty, current.second + revenue)
+                            }
                         }
                         
                         val catStatsList = categoryStats.map { (cat, data) ->

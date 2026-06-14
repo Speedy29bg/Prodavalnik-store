@@ -302,6 +302,12 @@ function renderLogin(isRegister = false) {
         alertBox.style.display = 'none';
         
         if (isRegister) {
+            if (!isValidPassword(passwordHash)) {
+                alertBox.className = 'alert alert-danger';
+                alertBox.innerText = 'Паролата трябва да бъде поне 6 символа и да съдържа главна буква, малка буква и цифра!';
+                alertBox.style.display = 'block';
+                return;
+            }
             const firstName = document.getElementById('firstName').value;
             const lastName = document.getElementById('lastName').value;
             
@@ -310,7 +316,19 @@ function renderLogin(isRegister = false) {
             const bankAccounts = [];
             
             for (let i = 0; i < bankNameInputs.length; i++) {
-                if (bankNameInputs[i].value && bankIbanInputs[i].value) {
+                if (bankNameInputs[i].value || bankIbanInputs[i].value) {
+                    if (!bankNameInputs[i].value || !bankIbanInputs[i].value) {
+                        alertBox.className = 'alert alert-danger';
+                        alertBox.innerText = 'Името на банката и IBAN са задължителни за всички сметки!';
+                        alertBox.style.display = 'block';
+                        return;
+                    }
+                    if (!isValidIban(bankIbanInputs[i].value)) {
+                        alertBox.className = 'alert alert-danger';
+                        alertBox.innerText = `Невалиден IBAN или грешна контролна сума: ${bankIbanInputs[i].value}`;
+                        alertBox.style.display = 'block';
+                        return;
+                    }
                     bankAccounts.push({
                         bankName: bankNameInputs[i].value,
                         accountNumber: bankIbanInputs[i].value
@@ -433,17 +451,17 @@ async function renderCatalog() {
                 
             const itemSuppliers = state.suppliers
                 .filter(s => item.supplierIds.includes(s.id))
-                .map(s => s.name)
+                .map(s => escapeHtml(s.name))
                 .join(', ') || 'Няма посочени';
             
             html += `
                 <div class="card catalog-card">
                     <div class="catalog-header">
-                        <span class="category-tag">${item.category}</span>
+                        <span class="category-tag">${escapeHtml(item.category)}</span>
                         <span class="price-class ${item.itemClass}">${item.itemClass}</span>
                     </div>
-                    <div class="item-title">${item.name}</div>
-                    <div class="item-desc">${item.description}</div>
+                    <div class="item-title">${escapeHtml(item.name)}</div>
+                    <div class="item-desc">${escapeHtml(item.description)}</div>
                     <div class="item-suppliers">
                         <i class="fas fa-truck-loading"></i> Доставчици: <strong>${itemSuppliers}</strong>
                     </div>
@@ -524,9 +542,9 @@ function renderCart() {
         itemsHtml += `
             <tr>
                 <td>
-                    <strong>${item.name}</strong><br>
+                    <strong>${escapeHtml(item.name)}</strong><br>
                     <span class="price-class ${item.itemClass}" style="font-size:0.7rem; padding: 0.1rem 0.4rem;">${item.itemClass}</span>
-                    <span style="font-size:0.8rem; color:var(--text-muted); margin-left: 0.5rem;">кат. ${item.category}</span>
+                    <span style="font-size:0.8rem; color:var(--text-muted); margin-left: 0.5rem;">кат. ${escapeHtml(item.category)}</span>
                 </td>
                 <td style="text-align:right;">${price.toFixed(2)} лв.</td>
                 <td>
@@ -550,7 +568,7 @@ function renderCart() {
     const accounts = state.client?.bankAccounts || [];
     let accountsHtml = '<option value="">-- Изберете банкова сметка --</option>';
     accounts.forEach(acc => {
-        accountsHtml += `<option value="${acc.id}">${acc.bankName} - ${acc.accountNumber}</option>`;
+        accountsHtml += `<option value="${acc.id}">${escapeHtml(acc.bankName)} - ${escapeHtml(acc.accountNumber)}</option>`;
     });
     
     view.innerHTML = `
@@ -711,6 +729,11 @@ function renderAccounts() {
         e.preventDefault();
         const bankName = document.getElementById('bankName').value;
         const accountNumber = document.getElementById('iban').value;
+        
+        if (!isValidIban(accountNumber)) {
+            showToast("Невалиден IBAN или грешна контролна сума!", "danger");
+            return;
+        }
         
         try {
             const res = await fetch(`/api/clients/${state.client.id}/bank-accounts`, {
@@ -889,6 +912,13 @@ async function renderModerator() {
         if (res.ok) stats = await res.json();
     } catch(e) {}
     
+    // Fetch clients
+    let clientsList = [];
+    try {
+        const res = await fetch('/api/clients');
+        if (res.ok) clientsList = await res.json();
+    } catch(e) {}
+    
     let statsHtml = '';
     if (stats && stats.categoryStats) {
         statsHtml = `
@@ -960,6 +990,43 @@ async function renderModerator() {
             ${statsHtml}
         </div>
         
+        <!-- Clients management section -->
+        <div class="card" style="margin-bottom: 2rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1.5rem;">
+                <h3>Управление на Клиенти</h3>
+            </div>
+            
+            <table class="admin-table">
+                <thead>
+                    <tr>
+                        <th>Клиентски №</th>
+                        <th>Име / Потребител</th>
+                        <th>Банкови сметки</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${clientsList.map(client => {
+                        const banks = client.bankAccounts.map(b => `${escapeHtml(b.bankName)}: ${escapeHtml(b.accountNumber)}`).join('<br>') || 'няма';
+                        return `
+                            <tr>
+                                <td><code>${escapeHtml(client.clientNumber)}</code></td>
+                                <td><strong>${escapeHtml(client.firstName)} ${escapeHtml(client.lastName)}</strong><br><small style="color:var(--text-muted);">@${escapeHtml(client.username)}</small></td>
+                                <td><small>${banks}</small></td>
+                                <td>
+                                    <div class="action-buttons">
+                                        <button class="btn btn-secondary btn-sm" onclick="showClientModal(${client.id})"><i class="fas fa-edit"></i> Редакция</button>
+                                        <button class="btn btn-danger btn-sm" onclick="deleteClient(${client.id})"><i class="fas fa-trash"></i> Изтрий</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        `;
+                    }).join('')}
+                    ${clientsList.length === 0 ? '<tr><td colspan="4" style="text-align:center;">Няма регистрирани клиенти</td></tr>' : ''}
+                </tbody>
+            </table>
+        </div>
+        
         <!-- Items CRUD section -->
         <div class="card">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1.5rem;">
@@ -982,12 +1049,12 @@ async function renderModerator() {
                     ${state.items.map(item => {
                         const sups = state.suppliers
                             .filter(s => item.supplierIds.includes(s.id))
-                            .map(s => s.name)
+                            .map(s => escapeHtml(s.name))
                             .join(', ') || 'няма';
                         return `
                             <tr>
-                                <td><strong>${item.name}</strong><br><small style="color:var(--text-muted);">${item.description.substring(0,40)}...</small></td>
-                                <td>${item.category}</td>
+                                <td><strong>${escapeHtml(item.name)}</strong><br><small style="color:var(--text-muted);">${escapeHtml(item.description.substring(0,40))}...</small></td>
+                                <td>${escapeHtml(item.category)}</td>
                                 <td><strong>${item.price.toFixed(2)} лв.</strong></td>
                                 <td><span class="price-class ${item.itemClass}">${item.itemClass}</span></td>
                                 <td>${sups}</td>
@@ -1023,9 +1090,9 @@ async function renderModerator() {
                 <tbody>
                     ${state.suppliers.map(sup => `
                         <tr>
-                            <td><strong>${sup.name}</strong></td>
-                            <td>${sup.address}</td>
-                            <td><code>${sup.phone}</code></td>
+                            <td><strong>${escapeHtml(sup.name)}</strong></td>
+                            <td>${escapeHtml(sup.address)}</td>
+                            <td><code>${escapeHtml(sup.phone)}</code></td>
                             <td>
                                 <div class="action-buttons">
                                     <button class="btn btn-secondary btn-sm" onclick="showSupplierModal(${sup.id})"><i class="fas fa-edit"></i> Редакция</button>
@@ -1059,13 +1126,13 @@ async function renderModerator() {
                     ${state.promotions.map(promo => {
                         const items = state.items
                             .filter(i => promo.itemIds.includes(i.id))
-                            .map(i => i.name)
+                            .map(i => escapeHtml(i.name))
                             .join(', ') || 'всички';
                         const start = new Date(promo.startDate).toLocaleDateString('bg-BG');
                         const end = new Date(promo.endDate).toLocaleDateString('bg-BG');
                         return `
                             <tr>
-                                <td><strong>${promo.name}</strong></td>
+                                <td><strong>${escapeHtml(promo.name)}</strong></td>
                                 <td style="color:var(--premium-color); font-weight:700;">-${promo.discountPercent}%</td>
                                 <td>${start} - ${end}</td>
                                 <td><small>${items}</small></td>
@@ -1094,6 +1161,21 @@ async function renderModerator() {
         const lastName = document.getElementById('mrc-last').value;
         const bankName = document.getElementById('mrc-bank').value;
         const accountNumber = document.getElementById('mrc-iban').value;
+        
+        if (!isValidPassword(passwordHash)) {
+            showToast("Паролата трябва да бъде поне 6 символа и да съдържа главна буква, малка буква и цифра!", "danger");
+            return;
+        }
+        if (bankName || accountNumber) {
+            if (!bankName || !accountNumber) {
+                showToast("Името на банката и IBAN са задължителни за въведената сметка!", "danger");
+                return;
+            }
+            if (!isValidIban(accountNumber)) {
+                showToast("Невалиден IBAN или грешна контролна сума!", "danger");
+                return;
+            }
+        }
         
         try {
             const res = await fetch('/api/clients', {
@@ -1274,6 +1356,11 @@ async function renderAdmin() {
         const passwordHash = document.getElementById('acu-password').value;
         const role = document.getElementById('acu-role').value;
         
+        if (!isValidPassword(passwordHash)) {
+            showToast("Паролата трябва да бъде поне 6 символа и да съдържа главна буква, малка буква и цифра!", "danger");
+            return;
+        }
+        
         try {
             const res = await fetch('/api/users', {
                 method: 'POST',
@@ -1349,6 +1436,11 @@ async function showUserModal(userId) {
         e.preventDefault();
         const role = document.getElementById('cu-role').value;
         const passwordHash = document.getElementById('cu-password').value;
+        
+        if (passwordHash && !isValidPassword(passwordHash)) {
+            showToast("Паролата трябва да бъде поне 6 символа и да съдържа главна буква, малка буква и цифра!", "danger");
+            return;
+        }
         
         const payload = {
             username: user.username,
@@ -1787,6 +1879,11 @@ async function showClientModal(clientId) {
         const lastName = document.getElementById('cc-last').value;
         const passwordHash = document.getElementById('cc-password').value;
         
+        if (passwordHash && !isValidPassword(passwordHash)) {
+            showToast("Паролата трябва да бъде поне 6 символа и да съдържа главна буква, малка буква и цифра!", "danger");
+            return;
+        }
+        
         const payload = {
             username: client.username || '',
             passwordHash: passwordHash,
@@ -1912,3 +2009,47 @@ styleSheet.innerText = `
 }
 `;
 document.head.appendChild(styleSheet);
+
+// escape html symbols
+function escapeHtml(str) {
+    if (typeof str !== 'string') return str;
+    return str.replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/"/g, "&quot;")
+              .replace(/'/g, "&#039;");
+}
+
+function isValidIban(iban) {
+    if (!iban) return false;
+    const clean = iban.replace(/\s+/g, '').toUpperCase();
+    if (!/^[A-Z]{2}[0-9]{2}[A-Z0-9]{4,30}$/.test(clean)) return false;
+    
+    const rearranged = clean.substring(4) + clean.substring(0, 4);
+    let numericStr = '';
+    for (let i = 0; i < rearranged.length; i++) {
+        const ch = rearranged[i];
+        if (/[A-Z]/.test(ch)) {
+            numericStr += (ch.charCodeAt(0) - 65 + 10);
+        } else {
+            numericStr += ch;
+        }
+    }
+    
+    try {
+        const bigIntVal = BigInt(numericStr);
+        return bigIntVal % 97n === 1n;
+    } catch (e) {
+        let mod = 0;
+        for (let i = 0; i < numericStr.length; i++) {
+            mod = (mod * 10 + parseInt(numericStr[i], 10)) % 97;
+        }
+        return mod === 1;
+    }
+}
+
+function isValidPassword(password) {
+    if (!password) return false;
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{6,}$/;
+    return passwordRegex.test(password);
+}

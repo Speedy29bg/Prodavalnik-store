@@ -100,12 +100,12 @@ fun Application.configureDatabases() {
             RetailBankAccounts.insert {
                 it[clientId] = clientProfileId
                 it[bankName] = "УниКредит Булбанк"
-                it[accountNumber] = "BG91UNCR96601012345678"
+                it[accountNumber] = "BG95UNCR96601012345678"
             }
             RetailBankAccounts.insert {
                 it[clientId] = clientProfileId
                 it[bankName] = "Банка ДСК"
-                it[accountNumber] = "BG80DSKB93001098765432"
+                it[accountNumber] = "BG54DSKB93001098765432"
             }
         }
     }
