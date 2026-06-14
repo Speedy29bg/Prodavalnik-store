@@ -1231,7 +1231,7 @@ async function renderAdmin() {
                             </td>
                             <td>
                                 <div class="action-buttons">
-                                    <button class="btn btn-secondary btn-sm" onclick="editUserRole(${user.id}, '${user.role}')"><i class="fas fa-user-edit"></i> Промени Роля</button>
+                                    <button class="btn btn-secondary btn-sm" onclick="showUserModal(${user.id})"><i class="fas fa-user-edit"></i> Редакция</button>
                                     <button class="btn btn-danger btn-sm" onclick="deleteUser(${user.id})"><i class="fas fa-trash"></i> Изтрий</button>
                                 </div>
                             </td>
@@ -1293,29 +1293,87 @@ async function renderAdmin() {
     });
 }
 
-async function editUserRole(id, currentRole) {
-    const newRole = prompt("Въведете нова роля (admin, moderator, client):", currentRole);
-    if (!newRole || !['admin', 'moderator', 'client'].includes(newRole)) {
-        if (newRole) alert("Невалидна роля! Изберете между: admin, moderator, client");
+async function showUserModal(userId) {
+    let user = null;
+    try {
+        const res = await fetch('/api/users');
+        if (res.ok) {
+            const list = await res.json();
+            user = list.find(u => u.id === userId);
+        }
+    } catch (e) {
+        console.error("Failed to load user details", e);
+    }
+    
+    if (!user) {
+        showToast("Потребителят не беше намерен!", "danger");
         return;
     }
     
-    try {
-        const res = await fetch(`/api/users/${id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: '', passwordHash: '', role: newRole })
-        });
-        if (res.ok) {
-            showToast("Ролята на потребителя е променена", "success");
-            renderAdmin();
-        } else {
-            const data = await res.json();
-            showToast(data.error || "Грешка при промяна", "danger");
+    const div = document.createElement('div');
+    div.className = 'modal-overlay active';
+    div.id = 'crud-user-overlay';
+    
+    div.innerHTML = `
+        <div class="invoice-modal" style="text-align:left;">
+            <button class="close-modal" onclick="document.getElementById('crud-user-overlay').remove()">&times;</button>
+            <h3>Редактиране на потребител</h3>
+            
+            <form id="crud-user-form">
+                <div class="form-group">
+                    <label>Потребителско име</label>
+                    <input type="text" class="form-control" value="${user.username}" disabled>
+                    <small style="color:var(--text-muted);">Потребителското име не може да се променя</small>
+                </div>
+                <div class="form-group">
+                    <label>Роля в системата</label>
+                    <select id="cu-role" class="form-control" required>
+                        <option value="client" ${user.role === 'client' ? 'selected' : ''}>Клиент</option>
+                        <option value="moderator" ${user.role === 'moderator' ? 'selected' : ''}>Модератор</option>
+                        <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Администратор</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Нова парола (оставете празна, ако не искате да се променя)</label>
+                    <input type="password" id="cu-password" class="form-control" placeholder="Нова парола">
+                </div>
+                
+                <button type="submit" class="btn btn-primary" style="width:100%; margin-top: 1rem;">Запази промените</button>
+            </form>
+        </div>
+    `;
+    
+    document.body.appendChild(div);
+    
+    document.getElementById('crud-user-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const role = document.getElementById('cu-role').value;
+        const passwordHash = document.getElementById('cu-password').value;
+        
+        const payload = {
+            username: user.username,
+            passwordHash: passwordHash,
+            role: role
+        };
+        
+        try {
+            const res = await fetch(`/api/users/${userId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (res.ok) {
+                showToast("Потребителят е обновен успешно!", "success");
+                div.remove();
+                renderAdmin();
+            } else {
+                const data = await res.json();
+                showToast(data.error || "Грешка при обновяване на потребител", "danger");
+            }
+        } catch(err) {
+            showToast("Сървърна грешка при обновяване", "danger");
         }
-    } catch(e) {
-        showToast("Грешка при комуникация", "danger");
-    }
+    });
 }
 
 async function deleteUser(id) {
@@ -1667,6 +1725,109 @@ async function deletePromotion(id) {
         }
     } catch(e) {
         showToast("Грешка", "danger");
+    }
+}
+
+// D. CLIENT MODAL (Edit)
+async function showClientModal(clientId) {
+    let client = null;
+    try {
+        const res = await fetch('/api/clients');
+        if (res.ok) {
+            const list = await res.json();
+            client = list.find(c => c.id === clientId);
+        }
+    } catch (e) {
+        console.error("Failed to load client details", e);
+    }
+    
+    if (!client) {
+        showToast("Клиентът не беше намерен!", "danger");
+        return;
+    }
+    
+    const div = document.createElement('div');
+    div.className = 'modal-overlay active';
+    div.id = 'crud-client-overlay';
+    
+    div.innerHTML = `
+        <div class="invoice-modal" style="text-align:left;">
+            <button class="close-modal" onclick="document.getElementById('crud-client-overlay').remove()">&times;</button>
+            <h3>Редактиране на клиент</h3>
+            
+            <form id="crud-client-form">
+                <div class="form-group">
+                    <label>Потребителско име</label>
+                    <input type="text" class="form-control" value="${client.username || ''}" disabled>
+                    <small style="color:var(--text-muted);">Потребителското име не може да се променя</small>
+                </div>
+                <div class="form-group">
+                    <label>Собствено име</label>
+                    <input type="text" id="cc-first" class="form-control" value="${client.firstName}" required>
+                </div>
+                <div class="form-group">
+                    <label>Фамилно име</label>
+                    <input type="text" id="cc-last" class="form-control" value="${client.lastName}" required>
+                </div>
+                <div class="form-group">
+                    <label>Нова парола (оставете празна, ако не искате да се променя)</label>
+                    <input type="password" id="cc-password" class="form-control" placeholder="Нова парола">
+                </div>
+                
+                <button type="submit" class="btn btn-primary" style="width:100%; margin-top: 1rem;">Запази промените</button>
+            </form>
+        </div>
+    `;
+    
+    document.body.appendChild(div);
+    
+    document.getElementById('crud-client-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const firstName = document.getElementById('cc-first').value;
+        const lastName = document.getElementById('cc-last').value;
+        const passwordHash = document.getElementById('cc-password').value;
+        
+        const payload = {
+            username: client.username || '',
+            passwordHash: passwordHash,
+            firstName: firstName,
+            lastName: lastName,
+            bankAccounts: []
+        };
+        
+        try {
+            const res = await fetch(`/api/clients/${clientId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (res.ok) {
+                showToast("Данните на клиента са обновени успешно!", "success");
+                div.remove();
+                renderModerator();
+            } else {
+                const data = await res.json();
+                showToast(data.error || "Грешка при обновяване на клиент", "danger");
+            }
+        } catch(err) {
+            showToast("Сървърна грешка при обновяване", "danger");
+        }
+    });
+}
+
+async function deleteClient(clientId) {
+    if (!confirm("Внимание! Изтриването на клиента и всички негови банкови сметки и поръчки е необратимо. Желаете ли да продължите?")) return;
+    try {
+        const res = await fetch(`/api/clients/${clientId}`, { method: 'DELETE' });
+        if (res.ok) {
+            showToast("Клиентът е изтрит успешно!", "success");
+            renderModerator();
+        } else {
+            const data = await res.json();
+            showToast(data.error || "Грешка при изтриване на клиент", "danger");
+        }
+    } catch(err) {
+        showToast("Сървърна грешка при изтриване", "danger");
     }
 }
 

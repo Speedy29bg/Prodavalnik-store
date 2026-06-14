@@ -9,6 +9,7 @@ import io.ktor.server.sessions.*
 import io.ktor.server.http.content.*
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.inList
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -134,9 +135,9 @@ fun Application.configureRouting() {
                         }
                     } else null
                     
-                    call.respond(HttpStatusCode.OK, MeResponse(
-                        user = UserDTO(session.userId, session.username, session.role),
-                        client = clientInfo
+                    call.respond(HttpStatusCode.OK, mapOf(
+                        "user" to UserDTO(session.userId, session.username, session.role),
+                        "client" to clientInfo
                     ))
                 }
             }
@@ -228,21 +229,43 @@ fun Application.configureRouting() {
                     delete("/{id}") {
                         val id = call.parameters["id"]?.toIntOrNull() ?: return@delete call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалидно ID"))
                         
-                        transaction {
-                            // Don't delete last admin
-                            val user = RetailUsers.select { RetailUsers.id eq id }.singleOrNull()
-                            if (user != null && user[RetailUsers.role] == "admin") {
-                                val adminCount = RetailUsers.select { RetailUsers.role eq "admin" }.count()
-                                if (adminCount <= 1) {
-                                    throw IllegalArgumentException("Не може да изтриете единствения администратор")
+                        val result = try {
+                            transaction {
+                                val user = RetailUsers.select { RetailUsers.id eq id }.singleOrNull()
+                                if (user != null) {
+                                    if (user[RetailUsers.role] == "admin") {
+                                        val adminCount = RetailUsers.select { RetailUsers.role eq "admin" }.count()
+                                        if (adminCount <= 1) {
+                                            return@transaction "Не може да изтриете единствения администратор"
+                                        }
+                                    }
+                                    
+                                    // Cascade delete client profiles, bank accounts and orders if deleting a client user
+                                    val client = RetailClients.select { RetailClients.userId eq id }.singleOrNull()
+                                    if (client != null) {
+                                        val cId = client[RetailClients.id]
+                                        val orders = RetailOrders.select { RetailOrders.clientId eq cId }.map { it[RetailOrders.id] }
+                                        if (orders.isNotEmpty()) {
+                                            RetailOrderItems.deleteWhere { RetailOrderItems.orderId inList orders }
+                                            RetailOrders.deleteWhere { RetailOrders.clientId eq cId }
+                                        }
+                                        RetailBankAccounts.deleteWhere { RetailBankAccounts.clientId eq cId }
+                                        RetailClients.deleteWhere { RetailClients.id eq cId }
+                                    }
+                                    
+                                    RetailUsers.deleteWhere { RetailUsers.id eq id }
                                 }
+                                null
                             }
-                            
-                            // Delete related profiles, orders etc. is handled gracefully
-                            // For simplicity, we just delete the user.
-                            RetailUsers.deleteWhere { RetailUsers.id eq id }
+                        } catch (e: Exception) {
+                            e.message ?: "Грешка при изтриване на потребител"
                         }
-                        call.respond(HttpStatusCode.OK, mapOf("message" to "Потребителят е изтрит"))
+                        
+                        if (result != null) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to result))
+                        } else {
+                            call.respond(HttpStatusCode.OK, mapOf("message" to "Потребителят е изтрит"))
+                        }
                     }
                 }
             }
@@ -343,16 +366,25 @@ fun Application.configureRouting() {
                     delete("/{id}") {
                         val id = call.parameters["id"]?.toIntOrNull() ?: return@delete call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Невалидно ID"))
                         
-                        transaction {
-                            val client = RetailClients.select { RetailClients.id eq id }.singleOrNull()
-                            if (client != null) {
-                                val uId = client[RetailClients.userId]
-                                RetailBankAccounts.deleteWhere { RetailBankAccounts.clientId eq id }
-                                RetailClients.deleteWhere { RetailClients.id eq id }
-                                RetailUsers.deleteWhere { RetailUsers.id eq uId }
+                        try {
+                            transaction {
+                                val client = RetailClients.select { RetailClients.id eq id }.singleOrNull()
+                                if (client != null) {
+                                    val uId = client[RetailClients.userId]
+                                    val orders = RetailOrders.select { RetailOrders.clientId eq id }.map { it[RetailOrders.id] }
+                                    if (orders.isNotEmpty()) {
+                                        RetailOrderItems.deleteWhere { RetailOrderItems.orderId inList orders }
+                                        RetailOrders.deleteWhere { RetailOrders.clientId eq id }
+                                    }
+                                    RetailBankAccounts.deleteWhere { RetailBankAccounts.clientId eq id }
+                                    RetailClients.deleteWhere { RetailClients.id eq id }
+                                    RetailUsers.deleteWhere { RetailUsers.id eq uId }
+                                }
                             }
+                            call.respond(HttpStatusCode.OK, mapOf("message" to "Клиентът е изтрит"))
+                        } catch (e: Exception) {
+                            call.respond(HttpStatusCode.BadRequest, mapOf("error" to (e.message ?: "Грешка при изтриване на клиент")))
                         }
-                        call.respond(HttpStatusCode.OK, mapOf("message" to "Клиентът е изтрит"))
                     }
                 }
                 
@@ -384,7 +416,7 @@ fun Application.configureRouting() {
                                 it[accountNumber] = req.accountNumber
                             } get RetailBankAccounts.id
                         }
-                        call.respond(HttpStatusCode.Created, BankAccountCreatedResponse("Банковата сметка е добавена", accId))
+                        call.respond(HttpStatusCode.Created, mapOf("message" to "Банковата сметка е добавена", "id" to accId))
                     }
                     
                     delete("/{clientId}/bank-accounts/{accId}") {
@@ -805,7 +837,7 @@ fun Application.configureRouting() {
                                 )
                             }
                             
-                            call.respond(HttpStatusCode.Created, CheckoutResponse("Плащането е успешно. Генерирана сметка/фактура", generatedInvoice))
+                            call.respond(HttpStatusCode.Created, mapOf("message" to "Плащането е успешно. Генерирана сметка/фактура", "invoice" to generatedInvoice))
                         } catch (e: Exception) {
                             call.respond(HttpStatusCode.BadRequest, mapOf("error" to e.message))
                         }
