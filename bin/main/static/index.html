@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Мини Маркет - Онлайн Търговия</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+
+    <header>
+        <div class="nav-container">
+            <div class="logo" id="nav-logo">
+                Мини<span>Маркет</span>
+            </div>
+            
+            <nav>
+                <ul class="nav-menu" id="nav-menu">
+                    <!-- Dynamic Navigation Items -->
+                </ul>
+            </nav>
+            
+            <div id="nav-user-info" style="display: none;">
+                <!-- Dynamic User Badge & Logout -->
+            </div>
+        </div>
+    </header>
+
+    <main id="app-view">
+        <!-- Dynamic Views Loaded Here -->
+        <div style="text-align: center; margin-top: 10rem;">
+            <i class="fas fa-spinner fa-spin fa-3x" style="color: var(--primary);"></i>
+            <p style="margin-top: 1rem; color: var(--text-muted);">Зареждане на системата...</p>
+        </div>
+    </main>
+
+    <!-- Modal for Detailed Invoice/Bill -->
+    <div class="modal-overlay" id="invoice-modal-overlay">
+        <div class="invoice-modal">
+            <button class="close-modal" id="close-invoice-modal">&times;</button>
+            <div class="invoice-header">
+                <i class="fas fa-file-invoice-dollar fa-3x" style="color: var(--secondary); margin-bottom: 1rem;"></i>
+                <div class="invoice-title" id="inv-store-name">Име на Магазина</div>
+                <div style="font-size: 0.85rem; color: var(--text-muted);" id="inv-store-address">Адрес на Магазина</div>
+            </div>
+            
+            <div style="font-weight: 600; font-size: 1.1rem; margin-bottom: 0.8rem; border-bottom: 1px solid var(--card-border); padding-bottom: 0.3rem;">
+                СМЕТКА / ФАКТУРА
+            </div>
+            
+            <div class="invoice-details">
+                <div>
+                    <strong>Поръчка №:</strong> <span id="inv-order-id">10001</span><br>
+                    <strong>Дата:</strong> <span id="inv-order-date">2026-06-13</span>
+                </div>
+                <div style="text-align: right;">
+                    <strong>Клиентски №:</strong> <span id="inv-client-number">CL-10001</span><br>
+                    <strong>Имена:</strong> <span id="inv-client-name">Иван Иванов</span>
+                </div>
+            </div>
+            
+            <table class="invoice-table">
+                <thead>
+                    <tr>
+                        <th>Артикул</th>
+                        <th style="text-align: center;">Кол.</th>
+                        <th style="text-align: right;">Ед. цена</th>
+                        <th style="text-align: right;">Отстъпка</th>
+                        <th style="text-align: right;">Крайна сума</th>
+                    </tr>
+                </thead>
+                <tbody id="invoice-items-body">
+                    <!-- Dynamic Invoice Row Items -->
+                </tbody>
+            </table>
+            
+            <div class="invoice-total">
+                <span>Общо за плащане:</span>
+                <span id="inv-total-amount">0.00 лв.</span>
+            </div>
+            
+            <div style="font-size: 0.8rem; color: var(--text-muted); text-align: center; border-top: 1px solid var(--card-border); padding-top: 1rem;">
+                Платено чрез сметка: <strong id="inv-bank-account">УниКредит Булбанк - BG91UNCR966...</strong><br>
+                Благодарим Ви за пазаруването!
+            </div>
+        </div>
+    </div>
+
+    <!-- Script Entry Point -->
+    <script src="js/app.js"></script>
+</body>
+</html>
